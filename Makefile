@@ -2,8 +2,10 @@ MOD=am2301
 
 obj-m := $(MOD).o
 
+KERNEL_SRC=/lib/modules/$(shell uname -r)/build
+
 all:
-	ARCH=arm CROSS_COMPILE=${CCPREFIX} $(MAKE) -C ${KERNEL_SRC} M=$(PWD) modules
+	$(MAKE) -C ${KERNEL_SRC} M=$(PWD) modules
 
 clean:
-	ARCH=arm CROSS_COMPILE=${CCPREFIX} $(MAKE) -C ${KERNEL_SRC} M=$(PWD) clean
+	$(MAKE) -C ${KERNEL_SRC} M=$(PWD) clean

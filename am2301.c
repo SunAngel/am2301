@@ -6,6 +6,9 @@
  */
 
 #include <linux/module.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+
 #include <linux/kernel.h>
 #include <linux/gpio.h>
 #include <linux/interrupt.h>
@@ -13,8 +16,6 @@
 #include <linux/delay.h>
 #include <linux/semaphore.h>
 #include <linux/ktime.h>
-#include <linux/proc_fs.h>
-
 
 /*   Host:         ~~~~|__|~~~
  *   Sensor ACK:              |__|~~|
@@ -35,7 +36,9 @@ struct st_inf {
 };
 
 #define SHORT_DELAY 3
-#define DEFAULT_DELAY 5
+//#define DEFAULT_DELAY 5
+#define DEFAULT_DELAY 30
+#define PROC_SUBDIR "am2301"
 
 static int _pin = 24;
 static int _read_delay = DEFAULT_DELAY; /* in seconds */
@@ -46,11 +49,57 @@ static wait_queue_head_t _queue;
 static ktime_t _old;
 static volatile int _ulen;
 static struct st_inf sns;
-static int _reads[2] = {0, 0};
+static unsigned int _reads[2] = {0, 0};
 static unsigned char _data[5];
+
 #ifdef CONFIG_PROC_FS
-static struct proc_dir_entry* entry;
+static struct proc_dir_entry *am231_dir = NULL, /* *pin_dir = NULL,*/ *temp_ent = NULL, *rh_ent = NULL;
+
+static int am231_show_temp(struct seq_file *m, void *v)
+{
+	if (_reads[1] < 2) { /* at least two consecutive readings OK */
+		seq_printf(m,"NaN\n");
+	} else {
+		seq_printf(m, "%d.%d\n", sns.t / 10, sns.t%10);
+	}
+	return 0;
+}
+
+static int am231_open_temp(struct inode *inode, struct  file *file) {
+	return single_open(file, am231_show_temp, NULL);
+}
+
+static const struct file_operations fops_temp = {
+	.owner = THIS_MODULE,
+	.open = am231_open_temp,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static int am231_show_rh(struct seq_file *m, void *v)
+{
+	if (_reads[1] < 2) { /* at least two consecutive readings OK */
+		seq_printf(m,"NaN\n");
+	} else {
+		seq_printf(m, "%d.%d\n", sns.rh / 10, sns.rh%10);
+	}
+	return 0;
+}
+
+static int am231_open_rh(struct inode *inode, struct  file *file) {
+	return single_open(file, am231_show_rh, NULL);
+}
+
+static const struct file_operations fops_rh = {
+	.owner = THIS_MODULE,
+	.open = am231_open_rh,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
 #endif
+
 
 #define CHECK_RET(r) do { \
 		if (r != 0) {			\
@@ -161,7 +210,7 @@ static int do_read_data(struct st_inf *s)
 	 * Assuming that sometimes one bit is lost and, if the values are low enough,
 	 * the checksum is identical.
 	 */
-	cks = _data[0] + _data[1] + _data[2] + _data[3];
+	cks = (_data[0] + _data[1] + _data[2] + _data[3]) & 0xFF;
 	if (cks != _data[4]) {
 		return -1;
 	}
@@ -222,6 +271,10 @@ static int read_thread(void *data)
 				else {
 					sns = s;
 					_reads[1]++;
+					//printk(KERN_ERR "T     :\t\t%d.%d\n", sns.t / 10, sns.t%10);
+					//printk(KERN_ERR "RH    :\t\t%d.%d\n", sns.rh / 10, sns.rh%10);
+					//printk(KERN_ERR "QUAL  :\t\t%d/%d %d%c\n", _reads[1], _reads[0],
+					//		_reads[1] * 100 / _reads[0], '\%');
 				}
 			}
 			sp = s;
@@ -229,33 +282,6 @@ static int read_thread(void *data)
         }
         return 0;
 }
-
-#ifdef CONFIG_PROC_FS
-static int proc_read_status(char *page, char **start, off_t off, int count,
-			    int *eof, void *data)
-{
-	char *p = page;
-	int len;
-
-	if (_reads[1] < 2) { /* at least two consecutive readings OK */
-		p += sprintf(p, "Not ready\n");
-	} else {
-		p += sprintf(p, "T     :\t\t%d.%d\n", sns.t / 10, sns.t%10);
-		p += sprintf(p, "RH    :\t\t%d.%d\n", sns.rh / 10, sns.rh%10);
-		p += sprintf(p, "QUAL  :\t\t%d/%d %d%c\n", _reads[1], _reads[0],
-			     _reads[1] * 100 / _reads[0], '\%');
-	}
-	len = (p - page) - off;
-	if (len < 0) {
-		len = 0;
-	}
-
-	*eof = (len <= count) ? 1 : 0;
-	*start = page + off;
-
-	return len;
-}
-#endif
 
 static int __init am2301_init(void)
 {
@@ -293,15 +319,41 @@ static int __init am2301_init(void)
 	}
 
 #ifdef CONFIG_PROC_FS
-	entry = create_proc_entry("am2301", S_IRUGO, NULL);
-	if (!entry) {
-		printk(KERN_ERR "am2301: Unable to create proc/am2301\n");
+	//am231_dir, pin_dir, temp_ent, rh_ent
+	
+	am231_dir = proc_mkdir(PROC_SUBDIR, NULL);
+	if (!am231_dir) {
+		printk(KERN_ERR "am2301: Unable to create /proc/" PROC_SUBDIR "\n");
 		goto _cleanup_3;
 	}
-	entry->read_proc = proc_read_status;
+
+	temp_ent = proc_create("temp", 0, am231_dir, &fops_temp);
+	if (!temp_ent) {
+		printk(KERN_ERR "am2301: Unable to create /proc/" PROC_SUBDIR "/temp\n");
+		goto _cleanup_4;
+	}
+
+	rh_ent = proc_create("rh", 0, am231_dir, &fops_rh);
+	if (!rh_ent) {
+		printk(KERN_ERR "am2301: Unable to create /proc/" PROC_SUBDIR "/rh\n");
+		goto _cleanup_4;
+	}
 #endif
 	return 0;
 
+_cleanup_4:
+	if (am231_dir) {
+		proc_remove(am231_dir);
+		am231_dir = NULL;
+	}
+	if (temp_ent) {
+		proc_remove(temp_ent);
+		temp_ent = NULL;
+	}
+	if (rh_ent) {
+		proc_remove(rh_ent);
+		rh_ent = NULL;
+	}
 _cleanup_3:
 	kthread_stop(ts);
 _cleanup_2:
@@ -325,7 +377,18 @@ static void __exit am2301_exit(void)
  	(void) gpio_direction_output(_pin, 1);
 	gpio_free(_pin);
 
-	remove_proc_entry("am2301", NULL);
+	if (am231_dir) {
+		proc_remove(am231_dir);
+		am231_dir = NULL;
+	}
+	if (temp_ent) {
+		proc_remove(temp_ent);
+		temp_ent = NULL;
+	}
+	if (rh_ent) {
+		proc_remove(rh_ent);
+		rh_ent = NULL;
+	}
 	printk(KERN_INFO "am2301: exit\n");
 }
 
