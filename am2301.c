@@ -61,7 +61,7 @@ static int am231_show_temp(struct seq_file *m, void *v)
 	if (_reads[1] < 2) { /* at least two consecutive readings OK */
 		seq_printf(m,"NaN\n");
 	} else {
-		seq_printf(m, "%d.%d\n", sns.t / 10, sns.t%10);
+		seq_printf(m, "%d.%d\n", sns.t / 10, (unsigned int) abs(sns.t%10));
 	}
 	return 0;
 }
@@ -236,10 +236,11 @@ static int do_read_data(struct st_inf *s)
 
 	/* ToDo: Check negative temperatures */
 	s->rh = (int) (int16_t)(((uint16_t) _data[0] << 8) | (uint16_t) _data [1]);
-	s->t  = (int) (((uint16_t) _data[2] << 8) | (uint16_t) _data [3]);
-	if (s->rh > 1000 || s->rh < 0 || s->t > 800 || s->t < -400 ) {
+	s->t  = (int) ((((uint16_t) _data[2] & 0x7F) << 8) | (uint16_t) _data [3]);
+	if (_data[2] & 0x80) s->t = -s->t;
+/*	if (s->rh > 1000 || s->rh < 0 || s->t > 800 || s->t < -400 ) {
 		return -1;
-	}
+	}*/
 	return 0;
 }
 

@@ -1,8 +1,10 @@
-MOD=am2301
 
-obj-m := $(MOD).o
+obj-m := am2301.o
+#dht22.o
 
 KERNEL_SRC=/lib/modules/$(shell uname -r)/build
+#KERNEL_SRC=/mnt/nanoStorage/src/pi-kernel
+#KERNEL_SRC=/mnt/MyBook/Etna/src/pi-kernel
 
 all:
 	$(MAKE) -C ${KERNEL_SRC} M=$(PWD) modules
